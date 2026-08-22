@@ -1,4 +1,4 @@
 provider "google" {
-  project = "ee-india-se-data"
+  project = "ee-sa-se-data"
   region  = "us-central1"
 }
