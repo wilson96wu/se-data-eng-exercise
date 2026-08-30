@@ -53,3 +53,8 @@ __pycache__/
 *.pyc
 
 .gcp/
+
+# Local venv for editor support (Airflow package resolution)
+airflow/.venv/
+
+.DS_Store

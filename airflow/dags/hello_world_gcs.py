@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pendulum
-
 from airflow.decorators import dag, task
 from airflow.providers.google.cloud.hooks.gcs import GCSHook
 
