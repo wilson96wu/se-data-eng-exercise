@@ -71,7 +71,7 @@ it's already applied) to confirm these before using them below.
    - Open Docker Desktop → **Settings → Resources**
    - Set **Memory** to 8 GB and **CPUs** to 2
    - Apply & Restart Docker Desktop
-6. Add the Google provider package so the GCS hook is available. Easiest way for local dev — add this line to `docker-compose.yaml` under the `x-airflow-common.environment` section:
+6. Add the Google provider package so the GCS hook is available. Easiest way for local dev — add this line to `docker-compose.airflow.yaml` under the `x-airflow-common.environment` section:
    ```yaml
    _PIP_ADDITIONAL_REQUIREMENTS: apache-airflow-providers-google
    ```
