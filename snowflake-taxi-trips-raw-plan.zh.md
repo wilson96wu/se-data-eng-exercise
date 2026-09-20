@@ -10,6 +10,8 @@
 - 认证方式：使用 **Snowflake CLI 连接配置文件**（`~/.snowflake/config`），而不是变量/tfvars 或 shell 环境变量——这样所有凭据（account、user、role、warehouse、私钥路径）都完全不出现在 Terraform 文件中。provider 代码块只需引用 `profile = var.snowflake_profile`。
 - Schema 名称：**`wilson`**（与仓库中已有的按用户命名惯例一致：`sa-data-landing-wilson`、`movies_data_wilson`）。
 - Account 标识符：**已核实并修正**——经查看 Snowsight 中的真实账户详情，ticket 里给出的 `ipb17578.us-east-1` 其实只是旧版的账户 *locator*（已确认：`IPB17578` 对应 Snowsight 中的 "Account locator" 字段），并不是现代 provider 可以直接使用的标识符。真正应使用的值是 `organization_name = "GUSDATD"` 和 `account_name = "DAB70621"`（分别来自 Snowsight 的 "Organization name" / "Account name" 字段）——这两个才是 provider 的主要、非实验性字段，因此不再需要 locator/region 的后备方案。登录名（`user` 字段）为 `WILSONWU`。
+- Warehouse：**已核实并修正**——ticket 里给的 `EE_TEST` 在账户里并不存在（`USE ROLE SE_DE_PARTICIPANT; SHOW WAREHOUSES;` 只返回一个 `SNOWFLAKE_LEARNING_WH`），实际连接时应使用 `SNOWFLAKE_LEARNING_WH`。
+- Database：**已核实并修正**——ticket 里给的 `EE_SE_DE_DB` 在账户里同样不存在（`SHOW DATABASES` 未列出该库）。角色 `SE_DE_PARTICIPANT` 实际拥有所有权（owner）的数据库是 `NEW_YORK_311`，这才是应该使用的值。
 
 ## 手动前置步骤（在 Terraform 之外，每位参与者一次性操作）
 
@@ -34,11 +36,20 @@ organization_name = "GUSDATD"
 account_name      = "DAB70621"
 user              = "WILSONWU"
 authenticator     = "SNOWFLAKE_JWT"
-private_key_path  = "/Users/wilson/.snowflake/keys/wilson_rsa_key.p8"
+private_key       = '''-----BEGIN PRIVATE KEY-----
+<wilson_rsa_key.p8 的完整内容，包含 header/footer 行>
+-----END PRIVATE KEY-----'''
 role              = "SE_DE_PARTICIPANT"
-warehouse         = "EE_TEST"
+warehouse         = "SNOWFLAKE_LEARNING_WH"
 ```
 该文件位于仓库之外（`~/.snowflake/config`），因此无需为保护密钥而修改 `.gitignore`。
+
+**重要（部署时发现）：** provider v2 的 TOML 配置**不支持** `private_key_path` 字段——即使写了也会被静默忽略，导致 `terraform apply` 报错 `trying to use keypair authentication, but PrivateKey was not provided in the driver config`。必须把私钥文件的**完整内容**直接内嵌到 `private_key` 字段里（用 TOML 三引号 `'''...'''` 保留换行），而不是引用文件路径。
+
+另外，`~/.snowflake/config` 文件本身也必须设置为所有者独占权限，否则 provider 会拒绝加载并报 `unsafe permissions - 0644`：
+```bash
+chmod 600 ~/.snowflake/config
+```
 
 ## Terraform 变更内容
 
@@ -53,9 +64,11 @@ snowflake = {
 **`terraform/providers.tf`** —— 新增一个仅指向 CLI 配置文件的最简 provider 代码块：
 ```hcl
 provider "snowflake" {
-  profile = var.snowflake_profile
+  profile                  = var.snowflake_profile
+  preview_features_enabled = ["snowflake_table_resource"]
 }
 ```
+**部署时发现：** `snowflake_table` 资源目前是 provider 的预览特性（preview feature），不加 `preview_features_enabled` 会导致 `terraform apply` 直接报错拒绝执行。
 
 **`terraform/variables.tf`** —— 新增：
 ```hcl
@@ -68,7 +81,7 @@ variable "snowflake_profile" {
 variable "snowflake_database" {
   description = "Snowflake database for the raw layer"
   type        = string
-  default     = "EE_SE_DE_DB"
+  default     = "NEW_YORK_311"
 }
 
 variable "snowflake_schema_name" {
@@ -143,8 +156,19 @@ output "snowflake_taxi_trips_raw_fqn" {
 3. `terraform apply`。
 4. 在 Snowflake 中验证（Snowsight 或 SnowSQL，角色为 `SE_DE_PARTICIPANT`）：
    ```sql
-   USE DATABASE EE_SE_DE_DB;
+   USE DATABASE NEW_YORK_311;
    DESC TABLE wilson.taxi_trips_raw;
    ```
-   确认全部 21 个源列都显示为 `VARCHAR`/`TEXT`，且 `created_timestamp` 显示为 `TIMESTAMP_NTZ`，默认值为 `CURRENT_TIMESTAMP()`。
-5. 执行 `terraform output`，确认 `snowflake_taxi_trips_raw_fqn` 输出为 `EE_SE_DE_DB.wilson.taxi_trips_raw`。
+   确认全部源列都显示为 `VARCHAR`/`TEXT`，且 `created_timestamp` 显示为 `TIMESTAMP_NTZ`，默认值为 `CURRENT_TIMESTAMP()`。
+5. 执行 `terraform output`，确认 `snowflake_taxi_trips_raw_fqn` 输出为 `NEW_YORK_311.wilson.taxi_trips_raw`。
+
+**部署时发现的坑（大小写/引号）：** Terraform provider 建表时会给标识符加双引号，保留 `.tf` 文件里写的原始大小写（`wilson`、`taxi_trips_raw` 都是小写）。因此在 Snowflake 里查询时，如果不加引号直接写 `SELECT * FROM taxi_trips_raw`，Snowflake 会自动把它转成大写 `TAXI_TRIPS_RAW` 去匹配，从而报 "does not exist or not authorized"。查询时需要给表名/schema 名加双引号保留小写：
+```sql
+SELECT * FROM NEW_YORK_311."wilson"."taxi_trips_raw" LIMIT 100;
+```
+
+## 部署过程中发现并修正的其他问题
+
+- **`snowflake_taxi_trips.tf` 里 `passenger_count` 列被重复定义了两次**，导致 `terraform apply` 报 `duplicate column name 'passenger_count'`。已删除多余的一份。
+- **`terraform/service_account.tf` 中 `google_service_account.airflow_gcs` 的 `account_id = "airflow-gcs-sa"` 与共享 GCP 项目 `ee-sa-se-data` 中已存在的同名资源冲突**（报 `409 alreadyExists`），推断是其他参与者或早期版本遗留的资源。此问题与本文档的 Snowflake 表主题无关，但发生在同一次 `terraform apply` 里，修复方式是仿照仓库里其他资源的命名惯例加上 `wilson` 后缀：`account_id = "airflow-gcs-sa-wilson"`。
+- 部署所用的 GCP 账户 (`gcloud config set account ...`) 和项目 (`gcloud config set project ee-sa-se-data`) 需要与 `wilson96wu@gmail.com` 匹配才能通过权限校验；同时 `gcloud auth application-default login` 也需要用同一账户重新登录，否则会报 `oauth2: "invalid_grant" "invalid_rapt"`。

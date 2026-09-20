@@ -5,5 +5,10 @@ terraform {
       source  = "hashicorp/google"
       version = "~> 7.0"
     }
+
+    snowflake = {
+      source  = "snowflakedb/snowflake"
+      version = "~> 2.0"
+    }
   }
 }

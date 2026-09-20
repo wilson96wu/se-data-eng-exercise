@@ -1,5 +1,5 @@
 resource "google_service_account" "airflow_gcs" {
-  account_id   = "airflow-gcs-sa"
+  account_id   = "airflow-gcs-sa-wilson"
   display_name = "Airflow GCS access (hello_world_gcs DAG)"
   description  = "Least-privilege identity for the local Airflow instance to read/write the landing bucket."
 }
